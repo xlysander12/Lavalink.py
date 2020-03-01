@@ -51,7 +51,7 @@ class WebSocket:
 
             self._ws = None
 
-        for attempt in range(3):
+        for attempt in range(1, 4):
             self._lavalink._logger.debug('[NODE-{}] Attempting to establish WebSocket '
                                          'connection ({}/3)...'.format(self._node.name, attempt))
 
@@ -77,7 +77,7 @@ class WebSocket:
                                                    'indicates that the remote server is a webserver '
                                                    'and not Lavalink. Check your ports, and try again.'
                                                    .format(self._node.name, ce.status))
-                backoff = min(10 * attempt, 60)
+                backoff = min(5 * attempt, 30)
                 await asyncio.sleep(backoff)
             else:
                 await self._node._manager._node_connect(self._node)
@@ -88,8 +88,8 @@ class WebSocket:
 
                 for message in self._message_queue:
                     await self._send(**message)
+                    self._message_queue.remove(message)
 
-                self._message_queue.clear()
                 code, reason = await self._listen()
                 self._ws = None
                 await self._node._manager._node_disconnect(self._node, code, reason)

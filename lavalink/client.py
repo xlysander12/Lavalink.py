@@ -104,8 +104,13 @@ class Client:
             Defaults to `60`.
         name: Optional[:class:`str`]
             An identifier for the node that will show in logs. Defaults to `None`
+
+        Returns
+        -------
+        :class:`Node`
+            The newly-created node.
         """
-        self.node_manager.add_node(host, port, password, region, resume_key, resume_timeout, name)
+        return self.node_manager.add_node(host, port, password, region, resume_key, resume_timeout, name)
 
     async def get_tracks(self, query: str, node: Node = None):
         """|coro|
