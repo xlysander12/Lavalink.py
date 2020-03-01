@@ -40,6 +40,8 @@ class NodeManager:
                  resume_key: str = None, resume_timeout: int = 60, name: str = None):
         """
         Adds a node to Lavalink's node manager.
+        Upon creating the node, you must call :func:`~Node.connect` to establish
+        a WebSocket connection.
 
         Parameters
         ----------
@@ -59,11 +61,17 @@ class NodeManager:
             Defaults to `60`.
         name: Optional[:class:`str`]
             An identifier for the node that will show in logs. Defaults to `None`.
+
+        Returns
+        -------
+        :class:`Node`
+            The newly-created node.
         """
         node = Node(self, host, port, password, region, resume_key, resume_timeout, name)
         self.nodes.append(node)
 
         self._lavalink._logger.info('[NODE-{}] Successfully added to Node Manager'.format(node.name))
+        return node
 
     def remove_node(self, node: Node):
         """
@@ -168,8 +176,8 @@ class NodeManager:
         reason: :class:`str`
             The reason why the node was disconnected.
         """
-        self._lavalink._logger.warning('[NODE-{}] Disconnected with code {} and reason {}'.format(node.name, code,
-                                                                                                  reason))
+        self._lavalink._logger.warning('[NODE-{}] Disconnected with code {} and reason {}'
+                                       .format(node.name, code, reason))
         await self._lavalink._dispatch_event(NodeDisconnectedEvent(node, code, reason))
 
         best_node = self.find_ideal_node(node.region)

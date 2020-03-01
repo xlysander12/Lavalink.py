@@ -23,44 +23,40 @@ class WebSocket:
         self._password = password
         self._resume_key = resume_key
         self._resume_timeout = resume_timeout
-
-        self._resuming_configured = False
+        self._resume_supported = resume_key is not None and resume_timeout is not None \
+            and resume_timeout > 0
 
         self._shards = self._lavalink._shard_count
         self._user_id = self._lavalink._user_id
 
+        self._connection_headers = {
+            'Authorization': self._password,
+            'Num-Shards': self._shards,
+            'User-Id': str(self._user_id)
+        }
+
         self._closers = (aiohttp.WSMsgType.CLOSE,
                          aiohttp.WSMsgType.CLOSING,
                          aiohttp.WSMsgType.CLOSED)
-
-        asyncio.ensure_future(self.connect())
 
     @property
     def connected(self):
         """ Returns whether the websocket is connected to Lavalink. """
         return self._ws is not None and not self._ws.closed
 
-    async def connect(self):
-        """ Attempts to establish a connection to Lavalink. """
-        headers = {
-            'Authorization': self._password,
-            'Num-Shards': self._shards,
-            'User-Id': str(self._user_id)
-        }
+    async def connect(self, reconnect: bool):
+        if self._ws:
+            if not self._ws.closed:
+                await self._ws.close()
 
-        if self._resuming_configured and self._resume_key:
-            headers['Resume-Key'] = self._resume_key
+            self._ws = None
 
-        attempt = 0
-
-        while not self.connected and attempt < 3:
-            attempt += 1
-            self._lavalink._logger.info('[NODE-{}] Attempting to establish WebSocket '
-                                        'connection ({}/3)...'.format(self._node.name, attempt))
+        for attempt in range(3):
+            self._lavalink._logger.debug('[NODE-{}] Attempting to establish WebSocket '
+                                         'connection ({}/3)...'.format(self._node.name, attempt))
 
             try:
-                self._ws = await self._session.ws_connect('ws://{}:{}'.format(self._host, self._port), headers=headers,
-                                                          heartbeat=60)
+                self._ws = await self._session.ws_connect('ws://{}:{}'.format(self._host, self._port), headers=self._connection_headers)
             except (aiohttp.ClientConnectorError, aiohttp.WSServerHandshakeError) as ce:
                 if isinstance(ce, aiohttp.ClientConnectorError):
                     self._lavalink._logger.warning('[NODE-{}] Invalid response received; this may indicate that '
@@ -85,55 +81,40 @@ class WebSocket:
                 await asyncio.sleep(backoff)
             else:
                 await self._node._manager._node_connect(self._node)
-                #  asyncio.ensure_future(self._listen())
 
-                if not self._resuming_configured and self._resume_key \
-                        and (self._resume_timeout and self._resume_timeout > 0):
+                if self._resume_supported and 'Resume-Key' not in self._connection_headers:
                     await self._send(op='configureResuming', key=self._resume_key, timeout=self._resume_timeout)
-                    self._resuming_configured = True
+                    self._connection_headers['Resume-Key'] = self._resume_key
 
-                if self._message_queue:
-                    for message in self._message_queue:
-                        await self._send(**message)
+                for message in self._message_queue:
+                    await self._send(**message)
 
-                    self._message_queue.clear()
+                self._message_queue.clear()
+                code, reason = await self._listen()
+                self._ws = None
+                await self._node._manager._node_disconnect(self._node, code, reason)
 
-                await self._listen()
-                # Ensure this loop doesn't proceed if _listen returns control back to this function.
-                return
+                if reconnect:
+                    await self.connect(reconnect)
 
-        self._lavalink._logger.warning('[NODE-{}] A WebSocket connection could not be established within 3 '
-                                       'attempts.'.format(self._node.name))
+                break
+                # Short-circuit for loop. The `else` block should not be called
+                # by breaking the loop this way.
+        else:  # A connection wasn't established within 3 attempts.
+            self._lavalink._logger.warning('[NODE-{}] Failed to establish a WebSocket connection within 3 attempts.'
+                                           .format(self._node.name))
 
     async def _listen(self):
         """ Listens for websocket messages. """
         async for msg in self._ws:
-            self._lavalink._logger.debug('[NODE-{}] Received WebSocket message: {}'.format(self._node.name, msg.data))
+            self._lavalink._logger.debug('[NODE-{}] [->] {}'.format(self._node.name, msg.data))
 
             if msg.type == aiohttp.WSMsgType.TEXT:
                 await self._handle_message(msg.json())
             elif msg.type in self._closers:
-                self._lavalink._logger.debug('[NODE-{}] Received close frame with code {}.'.format(self._node.name, msg.data))
-                await self._websocket_closed(msg.data, msg.extra)
-                return
-        await self._websocket_closed()
+                return msg.data, msg.extra
 
-    async def _websocket_closed(self, code: int = None, reason: str = None):
-        """
-        Handles when the websocket is closed.
-
-        Parameters
-        ----------
-        code: :class:`int`
-            The response code.
-        reason: :class:`str`
-            Reason why the websocket was closed. Defaults to `None`
-        """
-        self._lavalink._logger.debug('[NODE-{}] WebSocket disconnected with the following: code={} '
-                                     'reason={}'.format(self._node.name, code, reason))
-        self._ws = None
-        await self._node._manager._node_disconnect(self._node, code, reason)
-        await self.connect()
+        return 1006, ''
 
     async def _handle_message(self, data: dict):
         """
@@ -208,9 +189,10 @@ class WebSocket:
         data: :class:`dict`
             The data sent to Lavalink.
         """
+        self._lavalink._logger.debug('[NODE-{}] [<-] {}'.format(self._node.name, str(data)))
+
         if self.connected:
-            self._lavalink._logger.debug('[NODE-{}] Sending payload {}'.format(self._node.name, str(data)))
             await self._ws.send_json(data)
         else:
-            self._lavalink._logger.debug('[NODE-{}] Send called before WebSocket ready!'.format(self._node.name))
+            self._lavalink._logger.debug('[NODE-{}] Payload queued; WebSocket not ready.'.format(self._node.name))
             self._message_queue.append(data)

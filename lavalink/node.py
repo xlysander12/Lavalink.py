@@ -1,3 +1,5 @@
+import asyncio
+
 from .events import Event
 from .websocket import WebSocket
 
@@ -60,6 +62,18 @@ class Node:
             return 9e30
 
         return self.stats.penalty.total
+
+    def connect(self, reconnect: bool = True):
+        """|coro|
+        Attempts to connect to the corresponding Lavalink node.
+
+        Parameters
+        ----------
+        reconnect: Optional[:class:`bool`]
+            Whether to try and reconnect to the node upon disconnection.
+        """
+        asyncio.ensure_future(self._ws.connect(reconnect))
+        # Consider return.
 
     async def get_tracks(self, query: str):
         """|coro|
